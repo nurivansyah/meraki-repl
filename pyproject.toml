@@ -1,0 +1,61 @@
+[project]
+name = "meraki-twin"
+version = "0.1.0"
+description = "Network Twin - read-only projection of Meraki state from Elasticsearch"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "fastapi>=0.141.1",
+    "uvicorn[standard]>=0.27",
+    "pydantic>=2.6",
+    "pydantic-settings>=2.2",
+    "python-dotenv>=1.0",
+    "elasticsearch>=8.11",
+    "asyncpg>=0.28",
+    "psycopg[pool]>=3.1",
+    "bcrypt>=4.1",
+    "pyjwt>=2.8",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+    "pytest-asyncio>=0.23",
+    "httpx>=0.26",
+    "ruff>=0.3",
+    "import-linter>=0.20",
+]
+
+[tool.ruff]
+target-version = "py314"
+line-length = 100
+select = ["E", "F", "I", "UP", "B", "C4", "SIM", "T20", "W", "PL", "RUF"]
+ignore = ["S101", "T201"]
+fixable = ["ALL"]
+unsafe-fixes = true
+
+[tool.ruff.lint.isort]
+known-first-party = ["twin"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+
+[tool.import-linter]
+root = "src/twin"
+
+[tool.import-linter.contracts]
+domain = [
+    "forbid_import_modules = [\"twin.adapters\", \"twin.presentation\"]",
+    "type = independence",
+]
+application = [
+    "forbid_import_modules = [\"twin.adapters\", \"twin.presentation\"]",
+    "type = independence",
+]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
