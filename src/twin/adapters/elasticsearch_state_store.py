@@ -13,9 +13,11 @@ from __future__ import annotations
 from typing import Any
 
 from twin.application.state_store import (
+    ChangeDocument,
     ClientDocument,
     DeviceInventoryDocument,
     DeviceMetricsDocument,
+    EventDocument,
     NetworkDocument,
     SwitchportDocument,
     TopologyDocument,
@@ -457,3 +459,169 @@ class ElasticsearchStateStore:
             last_seen=src.get("lastSeen"),
             as_of=src.get("@timestamp", ""),
         )
+
+    # ------------------------------------------------------------------
+    # Chronology: events + changes
+    # ------------------------------------------------------------------
+
+    async def search_event_documents(  # noqa: PLR0913, PLR0917
+        self,
+        start: str | None = None,
+        end: str | None = None,
+        q: str | None = None,
+        device: str | None = None,
+        network_id: str | None = None,
+        limit: int = 100,
+    ) -> list[EventDocument]:
+        """Search syslog events with time range, free-text, and optional filters.
+
+        The ``meraki-syslog-*`` stream is append-only and does not carry a
+        ``meraki_org_id`` tag in the current pipeline, so no org filter is
+        applied.  Results are sorted newest first by ``@timestamp``.
+        """
+        filters: list[dict] = []
+        if start or end:
+            rng: dict = {"range": {"@timestamp": {}}}
+            if start:
+                rng["range"]["@timestamp"]["gte"] = start
+            if end:
+                rng["range"]["@timestamp"]["lte"] = end
+            filters.append(rng)
+        if device:
+            filters.append({"term": {"logsource": device}})
+        if network_id:
+            filters.append({"term": {"network_id": network_id}})
+
+        must: list[dict] = []
+        if q:
+            must.append({"query_string": {"query": q, "default_field": "message"}})
+
+        body: dict
+        if must:
+            body = {
+                "query": {"bool": {"filter": filters, "must": must}},
+                "sort": [{"@timestamp": "desc"}],
+            }
+        else:
+            body = {
+                "query": {"bool": {"filter": filters}},
+                "sort": [{"@timestamp": "desc"}],
+            }
+
+        resp = await self._es.search(index="meraki-syslog-*", body=body, size=min(limit, 10000))
+        hits = resp.get("hits", {}).get("hits", [])
+        docs = [self._event_from_doc(hit) for hit in hits]
+        docs.sort(key=lambda d: d.timestamp, reverse=True)
+        return docs[:limit]
+
+    async def list_change_documents(
+        self,
+        device: str | None = None,
+        network_id: str | None = None,
+        start: str | None = None,
+        end: str | None = None,
+        limit: int = 100,
+    ) -> list[ChangeDocument]:
+        """List changelog entries from ``meraki-*-history-*`` indices.
+
+        The org filter is always applied.  At least one of ``device`` (filters
+        on ``serial``) or ``network_id`` should be provided for a meaningful
+        result; if both are omitted the query scans all history indices for the
+        org.  Results are sorted newest first by ``@timestamp``.
+        """
+        filters = [_org_filter()]
+        if device:
+            filters.append({"term": {"serial": device}})
+        if network_id:
+            filters.append({"term": {"network_id": network_id}})
+        if start or end:
+            rng = {"range": {"@timestamp": {}}}
+            if start:
+                rng["range"]["@timestamp"]["gte"] = start
+            if end:
+                rng["range"]["@timestamp"]["lte"] = end
+            filters.append(rng)
+
+        body = {
+            "query": {"bool": {"filter": filters}},
+            "sort": [{"@timestamp": "desc"}],
+        }
+        resp = await self._es.search(
+            index="meraki-*-history-*", body=body, size=min(limit, 10000)
+        )
+        hits = resp.get("hits", {}).get("hits", [])
+        docs = [self._change_from_doc(hit) for hit in hits]
+        docs.sort(key=lambda d: d.timestamp, reverse=True)
+        return docs[:limit]
+
+    @staticmethod
+    def _event_from_doc(hit: dict) -> EventDocument:
+        src = hit.get("_source", {})
+        return EventDocument(
+            timestamp=src.get("@timestamp", ""),
+            message=src.get("message", ""),
+            device=src.get("host") or src.get("logsource"),
+            network_id=src.get("network_id"),
+            raw=src,
+        )
+
+    @staticmethod
+    def _change_from_doc(hit: dict) -> ChangeDocument:
+        src = hit.get("_source", {})
+        index = hit.get("_index", "")
+        entity_type = _extract_entity_type_from_index(index)
+        entity_id = _extract_entity_id(src, entity_type, hit.get("_id", ""))
+        network_id = src.get("network_id")
+        serial = src.get("serial")
+        previous = src.get("history", {}).get("previous", {})
+        current = {
+            k: v
+            for k, v in src.items()
+            if not k.startswith("history") and k not in ("meraki_org_id", "@timestamp")
+        }
+        return ChangeDocument(
+            timestamp=src.get("@timestamp", ""),
+            index=index,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            network_id=network_id,
+            serial=serial,
+            previous=previous,
+            current=current,
+            as_of=src.get("@timestamp", ""),
+        )
+
+
+def _extract_entity_type_from_index(index: str) -> str:
+    """Derive entity type from a history index name.
+
+    Example: ``meraki-inventory-history-2026.01.02`` -> ``inventory``.
+    """
+    HISTORY_PART_IDX = 2  # parts: ["meraki", "<entity_type>", "history", ...]
+    if not index.startswith("meraki-"):
+        return "unknown"
+    parts = index.split("-")
+    if len(parts) > HISTORY_PART_IDX and parts[HISTORY_PART_IDX] == "history":
+        return parts[1]
+    return "unknown"
+
+
+def _extract_entity_id(src: dict, entity_type: str, doc_id: str) -> str:
+    """Derive a human-readable entity identifier from the document."""
+    serial = src.get("serial")
+    interface = src.get("interface")
+    port_id = src.get("portId")
+    vlan_id = src.get("vlan_id")
+    network_id = src.get("network_id")
+
+    if entity_type in ("inventory", "device"):
+        return serial or doc_id
+    if entity_type == "uplink" and serial and interface:
+        return f"{serial}-{interface}"
+    if entity_type == "switchport" and serial and port_id:
+        return f"{serial}-{port_id}"
+    if entity_type == "vlan" and network_id and vlan_id:
+        return f"{network_id}-{vlan_id}"
+    if entity_type in ("network", "topology"):
+        return network_id or doc_id
+    return doc_id

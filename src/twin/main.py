@@ -14,6 +14,7 @@ from twin.config import settings
 from twin.domain.tokens import Token
 from twin.presentation.admin_tokens import router as admin_tokens_router
 from twin.presentation.bearer import require_bearer
+from twin.presentation.chronology_router import router as chronology_router
 from twin.presentation.state_router import (
     router as state_router,
 )
@@ -76,6 +77,7 @@ app.include_router(switchports_router)
 app.include_router(vlans_router)
 app.include_router(topology_router)
 app.include_router(clients_router)
+app.include_router(chronology_router)
 
 
 @app.get("/health")

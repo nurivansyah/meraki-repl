@@ -3,17 +3,21 @@
 from __future__ import annotations
 
 from twin.application.state_store import (
+    ChangeDocument,
     ClientDocument,
     DeviceInventoryDocument,
     DeviceMetricsDocument,
+    EventDocument,
     NetworkDocument,
     SwitchportDocument,
     TopologyDocument,
     UplinkDocument,
     VlanDocument,
 )
+from twin.domain.changes import Change
 from twin.domain.clients import Client
 from twin.domain.devices import Device
+from twin.domain.events import Event
 from twin.domain.networks import Network
 from twin.domain.switchports import Switchport
 from twin.domain.topology import Topology, TopologyLink, TopologyNode
@@ -239,5 +243,31 @@ def project_client(
         status=doc.status,
         last_seen=doc.last_seen,
         ephemeral=True,
+        as_of=_parse_as_of(doc.as_of),
+    )
+
+
+def project_event(doc: EventDocument) -> Event:
+    """Convert an ``EventDocument`` into a domain ``Event``."""
+    return Event(
+        timestamp=doc.timestamp,
+        message=doc.message,
+        device=doc.device,
+        network_id=doc.network_id,
+        raw=doc.raw,
+    )
+
+
+def project_change(doc: ChangeDocument) -> Change:
+    """Convert a ``ChangeDocument`` into a domain ``Change``."""
+    return Change(
+        timestamp=doc.timestamp,
+        index=doc.index,
+        entity_type=doc.entity_type,
+        entity_id=doc.entity_id,
+        network_id=doc.network_id,
+        serial=doc.serial,
+        previous=doc.previous,
+        current=doc.current,
         as_of=_parse_as_of(doc.as_of),
     )

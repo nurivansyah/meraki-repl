@@ -1,6 +1,8 @@
 """Pytest configuration and fixtures."""
 
+import fnmatch
 import os
+import re
 
 os.environ["TESTING"] = "1"
 
@@ -15,6 +17,24 @@ from twin.main import app
 from twin.presentation.dependencies import get_token_repository
 
 
+def _compare(value, bound, op) -> bool:
+    """Compare a doc value against a range bound (string or numeric aware)."""
+    try:
+        value_f, bound_f = float(value), float(bound)
+        cmp = value_f - bound_f
+    except (TypeError, ValueError):
+        cmp = (str(value) > str(bound)) - (str(value) < str(bound))
+    if op == "gte":
+        return cmp >= 0
+    if op == "lte":
+        return cmp <= 0
+    if op == "gt":
+        return cmp > 0
+    if op == "lt":
+        return cmp < 0
+    return True
+
+
 class FakeElasticsearch:
     """In-memory fake for Elasticsearch client at the repository boundary."""
 
@@ -26,30 +46,66 @@ class FakeElasticsearch:
         """Apply a single query clause to a document."""
         if "term" in clause:
             field, value = next(iter(clause["term"].items()))
-            return doc.get(field) == value
-        if "constant_score" in clause:
+            result = doc.get(field) == value
+        elif "range" in clause:
+            field, limits = next(iter(clause["range"].items()))
+            value = doc.get(field)
+            if value is None:
+                result = False
+            else:
+                result = all(_compare(value, bound, op) for op, bound in limits.items())
+        elif "match" in clause:
+            field, value = next(iter(clause["match"].items()))
+            if isinstance(value, dict):
+                value = value.get("query", value)
+            result = str(value).lower() in str(doc.get(field, "")).lower()
+        elif "query_string" in clause:
+            qs = clause["query_string"]
+            field = qs.get("default_field", "*")
+            needle = str(qs.get("query", "")).lower()
+            hay = doc.get(field, "")
+            result = needle in str(hay).lower()
+        elif "constant_score" in clause:
             inner = clause["constant_score"].get("filter", {})
-            return FakeElasticsearch._matches(doc, inner)
-        if "match_all" in clause:
-            return True
-        if "bool" in clause:
+            result = FakeElasticsearch._matches(doc, inner)
+        elif "match_all" in clause:
+            result = True
+        elif "bool" in clause:
             sub_filters = clause["bool"].get("filter", [])
-            return all(
+            must = clause["bool"].get("must", [])
+            must_not = clause["bool"].get("must_not", [])
+            result = all(
                 FakeElasticsearch._matches(doc, f) for f in sub_filters
+            ) and all(FakeElasticsearch._matches(doc, f) for f in must) and all(
+                not FakeElasticsearch._matches(doc, f) for f in must_not
             )
-        return True
+        else:
+            result = True
+        return result
+
+    def _resolve_indices(self, pattern: str) -> dict[str, dict[str, dict]]:
+        """Expand an index name or wildcard pattern to {index: {doc_id: doc}}."""
+        if "*" not in pattern:
+            return {pattern: self._indices.get(pattern, {})}
+        regex = re.compile(fnmatch.translate(pattern))
+        matched = {}
+        for name, docs in self._indices.items():
+            if regex.fullmatch(name):
+                matched[name] = docs
+        return matched
 
     async def search(
         self, index: str, body: dict | None = None, **kwargs
     ) -> dict:
         """Mock search - filters seeded docs by the query body."""
-        idx = self._indices.get(index, {})
+        resolved = self._resolve_indices(index)
         query = (body or {}).get("query", {})
         hits = []
-        for doc_id, doc in idx.items():
-            if query and not FakeElasticsearch._matches(doc, query):
-                continue
-            hits.append({"_source": doc, "_id": doc_id})
+        for idx_name, docs in resolved.items():
+            for doc_id, doc in docs.items():
+                if query and not FakeElasticsearch._matches(doc, query):
+                    continue
+                hits.append({"_source": doc, "_id": doc_id, "_index": idx_name})
         return {
             "hits": {"hits": hits, "total": {"value": len(hits)}},
             "took": 1,

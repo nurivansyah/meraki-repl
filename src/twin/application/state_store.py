@@ -125,6 +125,30 @@ class ClientDocument:
     last_seen: str | None  # lastSeen
     as_of: str  # ISO-8601 @timestamp
 
+
+@dataclass
+class EventDocument:
+    """Raw ES document from the ``meraki-syslog-*`` stream (append-only)."""
+    timestamp: str  # ISO-8601 @timestamp
+    message: str  # the raw syslog message line
+    device: str | None  # reporting syslog host
+    network_id: str | None  # present only when a parser has populated it
+    raw: dict  # full source document
+
+
+@dataclass
+class ChangeDocument:
+    """Raw ES document from the day-partitioned ``*-history-*`` changelog indices."""
+    timestamp: str  # ISO-8601 @timestamp
+    index: str  # the concrete history index the doc was read from
+    entity_type: str  # derived from the history index name
+    entity_id: str  # serial, network id, or combined key
+    network_id: str | None
+    serial: str | None
+    previous: dict  # history.previous
+    current: dict  # current top-level values
+    as_of: str  # ISO-8601 @timestamp
+
 """Port for the state mirror — interfaces the application depends on."""
 
 
@@ -195,3 +219,22 @@ class StateStore(Protocol):
     ) -> list[ClientDocument]: ...
 
     async def get_client_document(self, mac: str) -> ClientDocument | None: ...
+
+    async def search_event_documents(  # noqa: PLR0913, PLR0917
+        self,
+        start: str | None = None,
+        end: str | None = None,
+        q: str | None = None,
+        device: str | None = None,
+        network_id: str | None = None,
+        limit: int = 100,
+    ) -> list[EventDocument]: ...
+
+    async def list_change_documents(
+        self,
+        device: str | None = None,
+        network_id: str | None = None,
+        start: str | None = None,
+        end: str | None = None,
+        limit: int = 100,
+    ) -> list[ChangeDocument]: ...
