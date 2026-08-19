@@ -14,6 +14,8 @@ from twin.config import settings
 from twin.domain.tokens import Token
 from twin.presentation.admin_tokens import router as admin_tokens_router
 from twin.presentation.bearer import require_bearer
+from twin.presentation.state_router import router as state_router
+from twin.presentation.state_router import router_devices as devices_router
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +50,8 @@ app.add_middleware(
 )
 
 app.include_router(admin_tokens_router)
+app.include_router(state_router)
+app.include_router(devices_router)
 
 
 @app.get("/health")

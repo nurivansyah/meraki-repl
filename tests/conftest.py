@@ -20,14 +20,35 @@ class FakeElasticsearch:
     def __init__(self):
         self._indices: dict[str, dict[str, dict]] = {}
 
+    @staticmethod
+    def _matches(doc: dict, clause: dict) -> bool:
+        """Apply a single query clause to a document."""
+        if "term" in clause:
+            field, value = next(iter(clause["term"].items()))
+            return doc.get(field) == value
+        if "constant_score" in clause:
+            inner = clause["constant_score"].get("filter", {})
+            return FakeElasticsearch._matches(doc, inner)
+        if "match_all" in clause:
+            return True
+        if "bool" in clause:
+            sub_filters = clause["bool"].get("filter", [])
+            return all(
+                FakeElasticsearch._matches(doc, f) for f in sub_filters
+            )
+        return True
+
     async def search(
         self, index: str, body: dict | None = None, **kwargs
     ) -> dict:
-        """Mock search - returns empty hits by default."""
+        """Mock search - filters seeded docs by the query body."""
         idx = self._indices.get(index, {})
-        hits = [
-            {"_source": doc, "_id": doc_id} for doc_id, doc in idx.items()
-        ]
+        query = (body or {}).get("query", {})
+        hits = []
+        for doc_id, doc in idx.items():
+            if query and not FakeElasticsearch._matches(doc, query):
+                continue
+            hits.append({"_source": doc, "_id": doc_id})
         return {
             "hits": {"hits": hits, "total": {"value": len(hits)}},
             "took": 1,
@@ -65,8 +86,8 @@ class FakeElasticsearch:
         self._indices.clear()
 
     def seed(self, index: str, docs: dict[str, dict]):
-        """Seed an index with documents."""
-        self._indices[index] = docs.copy()
+        """Seed (or add to) an index with documents."""
+        self._indices.setdefault(index, {}).update(docs.copy())
 
 
 @pytest.fixture
