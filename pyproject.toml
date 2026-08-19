@@ -12,7 +12,7 @@ dependencies = [
     "python-dotenv>=1.0",
     "elasticsearch>=8.11",
     "asyncpg>=0.28",
-    "psycopg[pool]>=3.1",
+    "psycopg[binary,pool]>=3.1",
     "bcrypt>=4.1",
     "pyjwt>=2.8",
 ]
@@ -29,13 +29,15 @@ dev = [
 [tool.ruff]
 target-version = "py314"
 line-length = 100
+unsafe-fixes = true
+
+[tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "C4", "SIM", "T20", "W", "PL", "RUF"]
 ignore = ["S101", "T201"]
 fixable = ["ALL"]
-unsafe-fixes = true
 
 [tool.ruff.lint.isort]
-known-first-party = ["twin"]
+known-first-party = ["twin", "tests"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

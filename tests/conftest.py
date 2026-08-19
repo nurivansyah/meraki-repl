@@ -8,8 +8,10 @@ import pytest
 from fastapi.testclient import TestClient
 from httpx import AsyncClient
 
+from tests.fakes.fake_token_repository import FakeTokenRepository
 from twin.adapters.elasticsearch import get_es_client
 from twin.main import app
+from twin.presentation.dependencies import get_token_repository
 
 
 class FakeElasticsearch:
@@ -74,18 +76,26 @@ def fake_es() -> FakeElasticsearch:
 
 
 @pytest.fixture
-def client(fake_es: FakeElasticsearch) -> TestClient:
-    """FastAPI TestClient with ES dependency overridden."""
+def token_repo() -> FakeTokenRepository:
+    """Provide a fresh in-memory fake token repository."""
+    return FakeTokenRepository()
+
+
+@pytest.fixture
+def client(fake_es: FakeElasticsearch, token_repo: FakeTokenRepository) -> TestClient:
+    """FastAPI TestClient with ES and token repo dependencies overridden."""
     app.dependency_overrides[get_es_client] = lambda: fake_es
+    app.dependency_overrides[get_token_repository] = lambda: token_repo
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()
 
 
 @pytest.fixture
-async def async_client(fake_es: FakeElasticsearch):
+async def async_client(fake_es: FakeElasticsearch, token_repo: FakeTokenRepository):
     """Async test client for async endpoints."""
     app.dependency_overrides[get_es_client] = lambda: fake_es
+    app.dependency_overrides[get_token_repository] = lambda: token_repo
     async with AsyncClient(app=app, base_url="http://test") as ac:
         yield ac
     app.dependency_overrides.clear()
