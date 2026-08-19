@@ -3,12 +3,22 @@
 from __future__ import annotations
 
 from twin.application.state_store import (
+    ClientDocument,
     DeviceInventoryDocument,
     DeviceMetricsDocument,
     NetworkDocument,
+    SwitchportDocument,
+    TopologyDocument,
+    UplinkDocument,
+    VlanDocument,
 )
+from twin.domain.clients import Client
 from twin.domain.devices import Device
 from twin.domain.networks import Network
+from twin.domain.switchports import Switchport
+from twin.domain.topology import Topology, TopologyLink, TopologyNode
+from twin.domain.uplinks import Uplink
+from twin.domain.vlans import Vlan
 
 
 def _parse_as_of(ts: str) -> str:
@@ -107,3 +117,127 @@ def project_devices(
         project_device(inv_by_serial.get(serial), met_by_serial.get(serial), network_docs_map)
         for serial in sorted(serials)
     ]
+
+
+def project_uplink(doc: UplinkDocument) -> Uplink:
+    """Convert an ``UplinkDocument`` into a domain ``Uplink``."""
+    return Uplink(
+        serial=doc.serial,
+        interface=doc.interface,
+        network_id=doc.network_id,
+        network_name=doc.network_name,
+        public_ip=doc.public_ip,
+        ip=doc.ip,
+        gateway=doc.gateway,
+        addressing=doc.addressing,
+        status=doc.status,
+        enabled=doc.enabled,
+        primary=doc.primary,
+        dns=doc.dns,
+        as_of=_parse_as_of(doc.as_of),
+    )
+
+
+def project_switchport(
+    doc: SwitchportDocument,
+    network_docs_map: dict[str, NetworkDocument],
+) -> Switchport:
+    """Convert a ``SwitchportDocument`` into a domain ``Switchport``."""
+    network_doc = network_docs_map.get(doc.network_id) if doc.network_id else None
+    return Switchport(
+        serial=doc.serial,
+        port_id=doc.port_id,
+        network_id=doc.network_id,
+        network_name=network_doc.name if network_doc else None,
+        status=doc.status,
+        speed=doc.speed,
+        duplex=doc.duplex,
+        enabled=doc.enabled,
+        errors=doc.errors,
+        client_count=doc.client_count,
+        as_of=_parse_as_of(doc.as_of),
+    )
+
+
+def project_vlan(doc: VlanDocument) -> Vlan:
+    """Convert a ``VlanDocument`` into a domain ``Vlan``."""
+    return Vlan(
+        network_id=doc.network_id,
+        vlan_id=doc.vlan_id,
+        name=doc.name,
+        subnet=doc.subnet,
+        appliance_ip=doc.appliance_ip,
+        dhcp_handling=doc.dhcp_handling,
+        enabled=doc.enabled,
+        network_name=doc.network_name,
+        as_of=_parse_as_of(doc.as_of),
+    )
+
+
+def _project_topology_node(node: dict) -> TopologyNode:
+    return TopologyNode(
+        id=str(node.get("id", "")),
+        name=node.get("name"),
+        status=node.get("status"),
+        product_type=node.get("productType"),
+    )
+
+
+def _project_topology_link(link: dict) -> TopologyLink:
+    ends = link.get("ends") or []
+    if len(ends) > 1:
+        source = str(ends[0].get("nodeId", ""))
+        source_port = ends[0].get("portId")
+        target = str(ends[1].get("nodeId", ""))
+        target_port = ends[1].get("portId")
+    else:
+        source, source_port, target, target_port = "", None, "", None
+    return TopologyLink(
+        source=source,
+        source_port=source_port,
+        target=target,
+        target_port=target_port,
+    )
+
+
+def project_topology(doc: TopologyDocument) -> Topology:
+    """Convert a ``TopologyDocument`` into a domain ``Topology``."""
+    return Topology(
+        network_id=doc.network_id,
+        network_name=doc.network_name,
+        node_count=doc.node_count,
+        link_count=doc.link_count,
+        offline_nodes=doc.offline_nodes,
+        nodes=[_project_topology_node(n) for n in (doc.nodes or [])],
+        links=[_project_topology_link(link) for link in (doc.links or [])],
+        as_of=_parse_as_of(doc.as_of),
+    )
+
+
+def project_client(
+    doc: ClientDocument,
+    network_docs_map: dict[str, NetworkDocument],
+) -> Client:
+    """Convert a ``ClientDocument`` into a domain ``Client``.
+
+    Clients are always flagged ephemeral; device fields reflect the device that
+    most recently reported the client.
+    """
+    network_doc = network_docs_map.get(doc.network_id) if doc.network_id else None
+    return Client(
+        mac=doc.mac,
+        network_id=doc.network_id,
+        network_name=network_doc.name if network_doc else None,
+        serial=doc.serial,
+        ip=doc.ip,
+        ip6=doc.ip6,
+        description=doc.description,
+        user=doc.user,
+        vlan=doc.vlan,
+        switchport=doc.switchport,
+        ssid=doc.ssid,
+        status=doc.status,
+        last_seen=doc.last_seen,
+        ephemeral=True,
+        as_of=_parse_as_of(doc.as_of),
+    )

@@ -5,13 +5,10 @@ the in-memory ``FakeElasticsearch`` seeded with Meraki-shaped documents, with
 bearer-token auth through ``require_bearer``.
 """
 
-import pytest
 from fastapi import status
 from fastapi.testclient import TestClient
 
-from tests.conftest import FakeElasticsearch
-from tests.fakes.fake_token_repository import FakeTokenRepository
-from twin.application.token_service import TokenService
+from tests.conftest import FakeElasticsearch, auth_header
 
 ORG_ID = ""
 
@@ -47,14 +44,6 @@ METRICS_DOC = {
 }
 
 
-@pytest.fixture
-async def bearer(token_repo: FakeTokenRepository) -> str:
-    """Issue a valid token on the fake repo and return its raw value."""
-    service = TokenService(token_repo)
-    _, raw = await service.issue_token("reader")
-    return raw
-
-
 def seed_network(fake_es: FakeElasticsearch, doc: dict, network_id: str) -> None:
     fake_es.seed("meraki-network-metrics", {network_id: doc})
 
@@ -65,10 +54,6 @@ def seed_inventory(fake_es: FakeElasticsearch, doc: dict, serial: str) -> None:
 
 def seed_metrics(fake_es: FakeElasticsearch, doc: dict, serial: str) -> None:
     fake_es.seed("meraki-device-metrics", {serial: doc})
-
-
-def auth(bearer: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {bearer}"}
 
 
 # ---------------------------------------------------------------------------
@@ -83,7 +68,7 @@ def test_list_networks_requires_auth(client: TestClient):
 
 
 def test_list_networks_empty(client: TestClient, bearer: str):
-    resp = client.get("/networks", headers=auth(bearer))
+    resp = client.get("/networks", headers=auth_header(bearer))
     assert resp.status_code == status.HTTP_200_OK
     assert resp.json() == []
 
@@ -92,7 +77,7 @@ def test_list_networks_returns_projections(
     client: TestClient, fake_es: FakeElasticsearch, bearer: str
 ):
     seed_network(fake_es, NETWORK_DOC, "N_642828")
-    resp = client.get("/networks", headers=auth(bearer))
+    resp = client.get("/networks", headers=auth_header(bearer))
     assert resp.status_code == status.HTTP_200_OK
     data = resp.json()
     assert len(data) == 1
@@ -105,15 +90,27 @@ def test_list_networks_returns_projections(
     assert item["as_of"] == "2026-01-02T03:04:05.000Z"
 
 
+def test_list_networks_excludes_other_orgs(
+    client: TestClient, fake_es: FakeElasticsearch, bearer: str
+):
+    other = dict(NETWORK_DOC, meraki_org_id="ORG_2")
+    seed_network(fake_es, other, "N_OTHER")
+    seed_network(fake_es, NETWORK_DOC, "N_642828")
+    resp = client.get("/networks", headers=auth_header(bearer))
+    assert resp.status_code == status.HTTP_200_OK
+    data = resp.json()
+    assert [item["id"] for item in data] == ["N_642828"]
+
+
 def test_get_network_by_id(client: TestClient, fake_es: FakeElasticsearch, bearer: str):
     seed_network(fake_es, NETWORK_DOC, "N_642828")
-    resp = client.get("/networks/N_642828", headers=auth(bearer))
+    resp = client.get("/networks/N_642828", headers=auth_header(bearer))
     assert resp.status_code == status.HTTP_200_OK
     assert resp.json()["name"] == "HQ Office"
 
 
 def test_get_network_not_found(client: TestClient, bearer: str):
-    resp = client.get("/networks/N_MISSING", headers=auth(bearer))
+    resp = client.get("/networks/N_MISSING", headers=auth_header(bearer))
     assert resp.status_code == status.HTTP_404_NOT_FOUND
 
 
@@ -135,7 +132,7 @@ def test_list_devices_requires_auth(client: TestClient):
 
 
 def test_list_devices_empty(client: TestClient, bearer: str):
-    resp = client.get("/devices", headers=auth(bearer))
+    resp = client.get("/devices", headers=auth_header(bearer))
     assert resp.status_code == status.HTTP_200_OK
     assert resp.json() == []
 
@@ -146,7 +143,7 @@ def test_list_devices_merges_inventory_metrics_and_network(
     seed_network(fake_es, NETWORK_DOC, "N_642828")
     seed_inventory(fake_es, INVENTORY_DOC, "Q2HP-ABCD-1234")
     seed_metrics(fake_es, METRICS_DOC, "Q2HP-ABCD-1234")
-    resp = client.get("/devices", headers=auth(bearer))
+    resp = client.get("/devices", headers=auth_header(bearer))
     assert resp.status_code == status.HTTP_200_OK
     data = resp.json()
     assert len(data) == 1
@@ -170,7 +167,7 @@ def test_list_devices_liberal_merge_inventory_only(
 ):
     seed_network(fake_es, NETWORK_DOC, "N_642828")
     seed_inventory(fake_es, INVENTORY_DOC, "Q2HP-ABCD-1234")
-    resp = client.get("/devices", headers=auth(bearer))
+    resp = client.get("/devices", headers=auth_header(bearer))
     assert resp.status_code == status.HTTP_200_OK
     dev = resp.json()[0]
     assert dev["status"] is None
@@ -180,7 +177,7 @@ def test_list_devices_liberal_merge_metrics_only(
     client: TestClient, fake_es: FakeElasticsearch, bearer: str
 ):
     seed_metrics(fake_es, METRICS_DOC, "Q2HP-ABCD-1234")
-    resp = client.get("/devices", headers=auth(bearer))
+    resp = client.get("/devices", headers=auth_header(bearer))
     assert resp.status_code == status.HTTP_200_OK
     dev = resp.json()[0]
     assert dev["serial"] == "Q2HP-ABCD-1234"
@@ -194,7 +191,7 @@ def test_list_devices_filters_network_id(
     seed_inventory(fake_es, INVENTORY_DOC, "Q2HP-ABCD-1234")
     other = dict(INVENTORY_DOC, name="branch-switch-01", network_id="N_BRANCH")
     seed_inventory(fake_es, other, "Q2HP-ABCD-9999")
-    resp = client.get("/devices", params={"network_id": "N_BRANCH"}, headers=auth(bearer))
+    resp = client.get("/devices", params={"network_id": "N_BRANCH"}, headers=auth_header(bearer))
     assert resp.status_code == status.HTTP_200_OK
     devs = resp.json()
     assert len(devs) == 1
@@ -211,15 +208,15 @@ def test_list_devices_filters_product_type_and_status(
     seed_metrics(fake_es, other, "Q2HP-ABCD-8888")
     seed_inventory(fake_es, other_inv, "Q2HP-ABCD-8888")
 
-    resp = client.get("/devices", params={"product_type": "switch"}, headers=auth(bearer))
+    resp = client.get("/devices", params={"product_type": "switch"}, headers=auth_header(bearer))
     assert resp.status_code == status.HTTP_200_OK
     assert [d["serial"] for d in resp.json()] == ["Q2HP-ABCD-1234"]
 
-    resp = client.get("/devices", params={"status": "online"}, headers=auth(bearer))
+    resp = client.get("/devices", params={"status": "online"}, headers=auth_header(bearer))
     assert resp.status_code == status.HTTP_200_OK
     assert {d["serial"] for d in resp.json()} == {"Q2HP-ABCD-1234", "Q2HP-ABCD-8888"}
 
-    resp = client.get("/devices", params={"status": "offline"}, headers=auth(bearer))
+    resp = client.get("/devices", params={"status": "offline"}, headers=auth_header(bearer))
     assert resp.status_code == status.HTTP_200_OK
     assert resp.json() == []
 
@@ -230,7 +227,7 @@ def test_get_device_by_serial(
     seed_network(fake_es, NETWORK_DOC, "N_642828")
     seed_inventory(fake_es, INVENTORY_DOC, "Q2HP-ABCD-1234")
     seed_metrics(fake_es, METRICS_DOC, "Q2HP-ABCD-1234")
-    resp = client.get("/devices/Q2HP-ABCD-1234", headers=auth(bearer))
+    resp = client.get("/devices/Q2HP-ABCD-1234", headers=auth_header(bearer))
     assert resp.status_code == status.HTTP_200_OK
     dev = resp.json()
     assert dev["name"] == "core-switch-01"
@@ -242,13 +239,13 @@ def test_get_device_metrics_only(
     client: TestClient, fake_es: FakeElasticsearch, bearer: str
 ):
     seed_metrics(fake_es, METRICS_DOC, "Q2HP-ABCD-1234")
-    resp = client.get("/devices/Q2HP-ABCD-1234", headers=auth(bearer))
+    resp = client.get("/devices/Q2HP-ABCD-1234", headers=auth_header(bearer))
     assert resp.status_code == status.HTTP_200_OK
     assert resp.json()["status"] == "online"
 
 
 def test_get_device_not_found(client: TestClient, bearer: str):
-    resp = client.get("/devices/Q2HP-ABCD-0000", headers=auth(bearer))
+    resp = client.get("/devices/Q2HP-ABCD-0000", headers=auth_header(bearer))
     assert resp.status_code == status.HTTP_404_NOT_FOUND
 
 

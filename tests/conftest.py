@@ -10,6 +10,7 @@ from httpx import AsyncClient
 
 from tests.fakes.fake_token_repository import FakeTokenRepository
 from twin.adapters.elasticsearch import get_es_client
+from twin.application.token_service import TokenService
 from twin.main import app
 from twin.presentation.dependencies import get_token_repository
 
@@ -100,6 +101,19 @@ def fake_es() -> FakeElasticsearch:
 def token_repo() -> FakeTokenRepository:
     """Provide a fresh in-memory fake token repository."""
     return FakeTokenRepository()
+
+
+@pytest.fixture
+async def bearer(token_repo: FakeTokenRepository) -> str:
+    """Issue a valid token on the fake repo and return its raw value."""
+    service = TokenService(token_repo)
+    _, raw = await service.issue_token("reader")
+    return raw
+
+
+def auth_header(bearer: str) -> dict[str, str]:
+    """Return the ``Authorization`` header for a bearer token."""
+    return {"Authorization": f"Bearer {bearer}"}
 
 
 @pytest.fixture
