@@ -7,6 +7,7 @@ from fastapi import Depends, Request
 from twin.adapters.elasticsearch import get_es_client
 from twin.adapters.elasticsearch_state_store import ElasticsearchStateStore
 from twin.application.ports import TokenRepository
+from twin.application.read_mirror import ReadMirror
 from twin.application.state_store import StateStore
 from twin.application.token_service import TokenService
 
@@ -24,6 +25,13 @@ def get_state_store(
 ) -> StateStore:
     """Return a ``StateStore`` bound to the current Elasticsearch client."""
     return ElasticsearchStateStore(es)
+
+
+def get_read_mirror(
+    store: Annotated[StateStore, Depends(get_state_store)],
+) -> ReadMirror:
+    """Return the shared read core bound to the current ``StateStore``."""
+    return ReadMirror(store)
 
 
 def get_token_service(

@@ -15,6 +15,7 @@ dependencies = [
     "psycopg[binary,pool]>=3.1",
     "bcrypt>=4.1",
     "pyjwt>=2.8",
+    "mcp>=2.0.0",
 ]
 
 [project.optional-dependencies]

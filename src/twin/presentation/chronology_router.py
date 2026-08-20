@@ -1,7 +1,8 @@
 """REST endpoints for chronology: events search + changes list.
 
 All endpoints are bearer-token protected; unauthenticated requests receive
-``401`` with ``WWW-Authenticate: Bearer``.
+``401`` with ``WWW-Authenticate: Bearer``.  Endpoints are thin adapters over
+the shared ``ReadMirror`` core.
 """
 
 from __future__ import annotations
@@ -11,14 +12,13 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
 
-from twin.application.state_projector import project_change, project_event
-from twin.application.state_store import StateStore
+from twin.application.read_mirror import ReadMirror
 from twin.domain.tokens import Token
 from twin.presentation.bearer import require_bearer
-from twin.presentation.dependencies import get_state_store
+from twin.presentation.dependencies import get_read_mirror
 
 AuthenticatedToken = Annotated[Token, Depends(require_bearer)]
-Store = Annotated[StateStore, Depends(get_state_store)]
+Mirror = Annotated[ReadMirror, Depends(get_read_mirror)]
 
 router = APIRouter(prefix="/twin", tags=["chronology"])
 
@@ -26,7 +26,7 @@ router = APIRouter(prefix="/twin", tags=["chronology"])
 @router.get("/events", status_code=200)
 async def list_events(  # noqa: PLR0913, PLR0917
     _token: AuthenticatedToken,
-    store: Store,
+    mirror: Mirror,
     start: str | None = Query(None, description="ISO-8601 start time (inclusive)"),
     end: str | None = Query(None, description="ISO-8601 end time (inclusive)"),
     q: str | None = Query(None, description="Free-text query on the syslog message"),
@@ -39,16 +39,14 @@ async def list_events(  # noqa: PLR0913, PLR0917
     The raw syslog shape is surfaced in ``raw``; structured fields depend on
     future Logstash parsing.
     """
-    docs = await store.search_event_documents(
-        start=start, end=end, q=q, device=device, network_id=network_id, limit=limit
-    )
-    return [asdict(project_event(d)) for d in docs]
+    events = await mirror.search_events(start, end, q, device, network_id, limit)
+    return [asdict(event) for event in events]
 
 
 @router.get("/changes", status_code=200)
 async def list_changes(  # noqa: PLR0913, PLR0917
     _token: AuthenticatedToken,
-    store: Store,
+    mirror: Mirror,
     device: str | None = Query(None, description="Filter by device serial"),
     network_id: str | None = Query(None, description="Filter by network id"),
     start: str | None = Query(None, description="ISO-8601 start time (inclusive)"),
@@ -61,8 +59,5 @@ async def list_changes(  # noqa: PLR0913, PLR0917
     result.  Returns ``previous`` and ``current`` snapshots plus the index and
     entity identity.
     """
-    docs = await store.list_change_documents(
-        device=device, network_id=network_id, start=start, end=end, limit=limit
-    )
-    return [asdict(project_change(d)) for d in docs]
-
+    changes = await mirror.list_changes(device, network_id, start, end, limit)
+    return [asdict(change) for change in changes]
