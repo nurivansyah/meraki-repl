@@ -19,7 +19,7 @@ from mcp.server.mcpserver import MCPServer
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp
 
-from twin.application.read_mirror import ReadMirror
+from twin.application.read_mirror import GraphUnavailableError, ReadMirror
 from twin.application.token_service import TokenService
 from twin.presentation.bearer import WWW_AUTHENTICATE, validate_bearer_header
 
@@ -200,6 +200,38 @@ async def list_changes(
     ``limit`` is clamped to 1-1000."""
     changes = await _mirror().list_changes(device, network_id, start, end, limit)
     return [asdict(change) for change in changes]
+
+
+@_server.tool()
+async def impact(
+    device: str | None = None,
+    uplink_serial: str | None = None,
+    uplink_interface: str | None = None,
+    depth: int | None = None,
+) -> dict:
+    """Compute impact analysis from a device serial or uplink seed.
+
+    Seed must be either ``device`` (a serial) or both ``uplink_serial`` and
+    ``uplink_interface``.  Returns the reachable and masked device sets.
+    Raises ``GraphUnavailableError`` if the graph store is not configured.
+    """
+    try:
+        result = await _mirror().impact(
+            device=device,
+            uplink_serial=uplink_serial,
+            uplink_interface=uplink_interface,
+            depth=depth,
+        )
+    except GraphUnavailableError:
+        return {"error": "graph store unavailable"}
+    if result is None:
+        return {"error": "not found"}
+    return {
+        "seed_id": result.seed_id,
+        "reachable": [asdict(d) for d in result.reachable],
+        "masked": [asdict(d) for d in result.masked],
+        "as_of": result.as_of,
+    }
 
 
 def _bearer_wrap(app: ASGIApp) -> ASGIApp:

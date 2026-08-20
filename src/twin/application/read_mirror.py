@@ -7,6 +7,7 @@ the device inventory/metrics merge, so no surface re-implements them.
 
 from __future__ import annotations
 
+from twin.application.impact_analyzer import ImpactAnalyzer
 from twin.application.state_projector import (
     project_change,
     project_client,
@@ -24,6 +25,7 @@ from twin.domain.changes import Change
 from twin.domain.clients import Client
 from twin.domain.devices import Device
 from twin.domain.events import Event
+from twin.domain.graph import ImpactResult
 from twin.domain.networks import Network
 from twin.domain.switchports import Switchport
 from twin.domain.topology import Topology
@@ -34,6 +36,10 @@ MIN_LIMIT = 1
 MAX_LIMIT = 1000
 
 
+class GraphUnavailableError(Exception):
+    """Raised when the graph store is not available for impact analysis."""
+
+
 def _bounded(limit: int) -> int:
     """Clamp a result limit to the supported range."""
     return max(MIN_LIMIT, min(limit, MAX_LIMIT))
@@ -42,8 +48,9 @@ def _bounded(limit: int) -> int:
 class ReadMirror:
     """Application service composing the ``StateStore`` and projectors."""
 
-    def __init__(self, store: StateStore) -> None:
+    def __init__(self, store: StateStore, impact_analyzer: ImpactAnalyzer | None = None) -> None:
         self._store = store
+        self._impact_analyzer = impact_analyzer
 
     async def _network_map(self) -> dict[str, NetworkDocument]:
         return {d.id: d for d in await self._store.list_network_documents()}
@@ -182,3 +189,25 @@ class ReadMirror:
             device=device, network_id=network_id, start=start, end=end, limit=_bounded(limit)
         )
         return [project_change(d) for d in docs]
+
+    async def impact(
+        self,
+        device: str | None = None,
+        uplink_serial: str | None = None,
+        uplink_interface: str | None = None,
+        depth: int | None = None,
+    ) -> ImpactResult | None:
+        """Compute the impact analysis from a device serial or uplink seed.
+
+        Returns ``None`` when the seed does not exist in the graph.
+        Raises ``GraphUnavailableError`` when the graph store is not wired.
+        """
+        if self._impact_analyzer is None:
+            raise GraphUnavailableError()
+        if device is not None:
+            return await self._impact_analyzer.impact_from_device(device, depth=depth)
+        if uplink_serial is not None and uplink_interface is not None:
+            return await self._impact_analyzer.impact_from_uplink(
+                uplink_serial, uplink_interface, depth=depth
+            )
+        return None

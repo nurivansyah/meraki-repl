@@ -16,6 +16,7 @@ dependencies = [
     "bcrypt>=4.1",
     "pyjwt>=2.8",
     "mcp>=2.0.0",
+    "neo4j>=5.0",
 ]
 
 [project.optional-dependencies]
@@ -36,6 +37,15 @@ unsafe-fixes = true
 select = ["E", "F", "I", "UP", "B", "C4", "SIM", "T20", "W", "PL", "RUF"]
 ignore = ["S101", "T201"]
 fixable = ["ALL"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["PLC0415", "PLR2004"]
+"src/twin/sync/**" = ["PLC0415"]
+"src/twin/adapters/neo4j_graph_store.py" = ["PLC0415"]
+"src/twin/main.py" = ["PLC0415"]
+"src/twin/presentation/admin_sync_router.py" = ["PLC0415"]
+"src/twin/presentation/dependencies.py" = ["PLC0415"]
+"src/twin/presentation/impact_router.py" = ["PLC0415"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["twin", "tests"]

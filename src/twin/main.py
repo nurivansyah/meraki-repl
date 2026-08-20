@@ -9,14 +9,17 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from twin.adapters.elasticsearch import es_lifespan
 from twin.adapters.elasticsearch_state_store import ElasticsearchStateStore
+from twin.adapters.neo4j_graph_store import neo4j_lifespan
 from twin.adapters.postgres_token_repository import postgres_lifespan
 from twin.application.read_mirror import ReadMirror
 from twin.application.token_service import TokenService
 from twin.config import settings
 from twin.domain.tokens import Token
+from twin.presentation.admin_sync_router import router as admin_sync_router
 from twin.presentation.admin_tokens import router as admin_tokens_router
 from twin.presentation.bearer import require_bearer
 from twin.presentation.chronology_router import router as chronology_router
+from twin.presentation.impact_router import router as impact_router
 from twin.presentation.mcp_server import configure_runtime, mcp_app
 from twin.presentation.state_router import (
     router as state_router,
@@ -43,6 +46,15 @@ from twin.presentation.state_router import (
 logger = logging.getLogger(__name__)
 
 
+def _make_analyzer(graph_store):
+    """Create an ImpactAnalyzer from the graph store, or return None."""
+    if graph_store is None:
+        return None
+    from twin.application.impact_analyzer import ImpactAnalyzer
+
+    return ImpactAnalyzer(graph=graph_store, default_depth=settings.impact_default_depth)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
@@ -50,15 +62,24 @@ async def lifespan(app: FastAPI):
         app.state.es = es
         async with postgres_lifespan() as token_repo:
             app.state.token_repo = token_repo
-            if token_repo is not None:
-                token_service = TokenService(token_repo)
-                if settings.bootstrap_token:
-                    token = await token_service.create_bootstrap(settings.bootstrap_token)
-                    if token is not None:
-                        logger.info("Created bootstrap token '%s'", token.name)
-                if es is not None:
-                    configure_runtime(ReadMirror(ElasticsearchStateStore(es)), token_service)
-            yield
+            async with neo4j_lifespan() as graph_store:
+                app.state.graph_store = graph_store
+                app.state.impact_default_depth = settings.impact_default_depth
+                if token_repo is not None:
+                    token_service = TokenService(token_repo)
+                    if settings.bootstrap_token:
+                        token = await token_service.create_bootstrap(settings.bootstrap_token)
+                        if token is not None:
+                            logger.info("Created bootstrap token '%s'", token.name)
+                    if es is not None:
+                        configure_runtime(
+                            ReadMirror(
+                                ElasticsearchStateStore(es),
+                                impact_analyzer=_make_analyzer(graph_store),
+                            ),
+                            token_service,
+                        )
+                yield
     # Shutdown
 
 
@@ -77,6 +98,7 @@ app.add_middleware(
 )
 
 app.include_router(admin_tokens_router)
+app.include_router(admin_sync_router)
 app.include_router(state_router)
 app.include_router(devices_router)
 app.include_router(uplinks_router)
@@ -85,6 +107,7 @@ app.include_router(vlans_router)
 app.include_router(topology_router)
 app.include_router(clients_router)
 app.include_router(chronology_router)
+app.include_router(impact_router)
 app.mount("/mcp", mcp_app())
 
 

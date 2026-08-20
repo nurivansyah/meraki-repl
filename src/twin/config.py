@@ -30,6 +30,8 @@ class Settings(BaseSettings):
     neo4j_uri: str = Field(default="bolt://localhost:7687", alias="NEO4J_URI")
     neo4j_username: str = Field(default="neo4j", alias="NEO4J_USERNAME")
     neo4j_password: str = Field(default="changeme", alias="NEO4J_PASSWORD")
+    neo4j_auth: bool = Field(default=True, alias="NEO4J_AUTH")
+    impact_default_depth: int = Field(default=10, alias="IMPACT_DEFAULT_DEPTH")
 
     # NetBox
     netbox_url: str = Field(default="http://localhost:8000", alias="NETBOX_URL")
